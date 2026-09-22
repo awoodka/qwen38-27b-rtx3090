@@ -20,3 +20,8 @@ Not in this repository
 Added or changed by this fork (changed lines are marked "(fork)")
   README.md, NOTICE
       The notice of the fork, its credits, and a caveat on the Docker quick start.
+  templates/qwen3.8-27b.jinja, bench/test_chat_template.py
+      A chat template derived from that of Qwen/Qwen3.8-27B (Apache-2.0, Qwen team), as
+      shipped in dbirks/Qwen3.8-27B-W4A16-AutoRound: it adds the reasoning_effort level
+      'focused', and takes max/high as xhigh and minimal/none as low instead of raising.
+      The test checks that it renders like the original wherever the original works.
