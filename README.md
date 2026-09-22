@@ -1,5 +1,47 @@
 # Qwen3.8-27B on one RTX 3090
 
+> **This is a fork**: Alex Woodka's *thinking-levers* fork of
+> [syv-ai/qwen38-27b-rtx3090](https://github.com/syv-ai/qwen38-27b-rtx3090) (since renamed
+> [syv-ai/HyperQwen](https://github.com/syv-ai/HyperQwen)), branched at
+> [`bae2023`](https://github.com/syv-ai/qwen38-27b-rtx3090/tree/bae2023ffc98753d337d2d2041784a277599a4c4).
+> The serving stack, its vLLM patches and its measurements are upstream's work
+> ([Credits](#credits)). The fork adds opt-in levers that steer how Qwen3.8 spends its
+> thinking. Below the line, this is upstream's README at `bae2023`, with the fork's edits
+> marked (fork).
+
+A second lever, a logit penalty on reflection markers ("Wait", "Hmm", ...) that applies
+only inside `<think>`, is in progress.
+
+## Results
+
+None yet. Each lever is measured with paired evals against the published baseline run of
+this stack ([run page](https://localinference.alexwoodka.com/runs/83638382-55b5-460b-a309-e80986a75c7d)),
+and it counts as a success only with no paired accuracy drop, fewer cut-off answers and
+decode speed within 3%. The numbers will land here and in
+[docs/thinking-levers.md](docs/thinking-levers.md).
+
+## Credits
+
+- The **qwen38-27b-rtx3090 contributors**, whose stack this fork builds on: Mads
+  Henrichsen and Michael Stufflebeam (cpuchip) wrote most of it, with alvins82, markus,
+  Joakim Nohlgård, lukasz.rozmej, PassivePicasso, Anton Rastyazhenko, Daniel Donaldson,
+  cofade, linear3735, Cole Austin Wheatley, Lili, Sebastian and ThatsR4d. Upstream's docs
+  also credit @mjungnickel18, @lachhabw, @Dmtrii-tesla and @changtimwu.
+- **[vLLM](https://github.com/vllm-project/vllm)** (Apache-2.0), including the reasoning
+  parser and thinking-budget code the levers rely on.
+- **Qwen** for [Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) and the chat template
+  the fork's template is derived from (Apache-2.0); **dbirks** for the
+  [W4A16 AutoRound quantization](https://huggingface.co/dbirks/Qwen3.8-27B-W4A16-AutoRound);
+  **incoai** for the [DFlash2 drafter](https://huggingface.co/incoai/Qwen3.8-27B-DFlash2).
+- **NoWait** ([arXiv 2506.08343](https://arxiv.org/abs/2506.08343)) and
+  **[Swift-Qwen3.8-27B](https://huggingface.co/ukisai/Swift-Qwen3.8-27b)**, for the evidence
+  that suppressing reflection markers shortens reasoning, and that on hard math it is not
+  free.
+
+[NOTICE](NOTICE) records what is whose. Apache-2.0, like upstream ([LICENSE](LICENSE)).
+
+---
+
 ![Stock vLLM against this repo, same card, same prompts](docs/media/demo.gif)
 
 Serving setup for [Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) on a
@@ -30,6 +72,13 @@ Desktop is using WSL2, keep `VLLM_WSL2_ENABLE_PIN_MEMORY=1` enabled in `.env` or
 the V2 runner will abort with `RuntimeError: UVA is not available`. The example
 leaves API-key authentication disabled for local-only use; set `VLLM_API_KEY`
 before exposing the server beyond this machine.
+
+(fork) This quick start pulls upstream's prebuilt image,
+`ghcr.io/syv-ai/qwen38-27b-rtx3090:latest`, which has none of this fork's changes: the
+image carries its own copy of the launchers (the Dockerfile copies the repo in, and
+compose mounts only `./models`), and since upstream's rename that tag no longer updates.
+`docker compose build` builds the image from this checkout instead (not tested by the
+fork). The fork's own numbers come from the venv path in [Setup](#setup).
 
 | | `--profile batch` → [batch/](batch/) | `--profile single` → [single-user/](single-user/) |
 |---|---|---|

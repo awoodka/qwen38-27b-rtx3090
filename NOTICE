@@ -1,0 +1,22 @@
+qwen38-27b-rtx3090, thinking-levers fork
+Copyright 2026 Alex Woodka (the changes listed below)
+
+This is a fork of https://github.com/syv-ai/qwen38-27b-rtx3090 (since renamed
+syv-ai/HyperQwen), branched at commit bae2023ffc98753d337d2d2041784a277599a4c4. Like
+upstream, it is licensed under the Apache License 2.0; see LICENSE. Upstream ships no
+NOTICE file. This one records what the fork adds and where everything else comes from.
+
+Upstream
+  Everything not listed below is the work of the qwen38-27b-rtx3090 contributors (see
+  git log): the launchers, the vLLM 0.28.0 patch series in patches/ (which carries
+  backports of vLLM pull requests, Apache-2.0), the KVarN port in kvarn/ (KVarN by
+  Huawei CSL, Apache-2.0), the model-preparation and drafter scripts, the benchmarks and
+  the documentation.
+
+Not in this repository
+  The model weights, the drafter and vLLM are downloaded at setup time under their own
+  licenses.
+
+Added or changed by this fork (changed lines are marked "(fork)")
+  README.md, NOTICE
+      The notice of the fork, its credits, and a caveat on the Docker quick start.
