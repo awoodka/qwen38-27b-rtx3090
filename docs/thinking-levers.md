@@ -203,6 +203,80 @@ are screened on top of it.
   appears. All 645 checks passed on the RTX 3090 on 2026-09-22.
 - `bench/test_launcher_args.sh`: the exact `--reasoning-config` for each setting, nothing at
   0, and the refusals.
+- The live session (`bench/thinking_levers_session.sh`), whose results are below: the marker rates
+  it measures, the answers keeping the penalized words, the budget still capping reasoning, and the
+  speed comparison at λ = 3.
+
+## First measurements (2026-09-22)
+
+Two unattended sessions on an RTX 3090 at 250 W, `SPEC=dflash2 PREFIX_CACHE=1`, served from this
+fork's pinned runtime. These are server-level checks, not eval results: they say what each lever
+does to the model's thinking, not whether the answers get better. The evals decide that, and they
+have not run yet. Raw output lands in `bench/results/levers-*`, which git ignores.
+
+### With the levers off, this is upstream
+
+- Speed matches: 125.9 tok/s decode at C1 with default sampling and 137.6 greedy, at 3.24 and 3.48
+  tokens per step (`run_benchmarks.sh single`, the second run after the restart). The same card
+  measured 125.8 / 124.4 and 137.4 / 136.8 on bae2023 a week earlier.
+- Greedy output is reproducible within one installation: restarting the server reproduces all 12
+  prompts exactly, for bae2023 and for this fork alike.
+- Across installations it is not, with or without this fork. A second copy of bae2023's vLLM, byte
+  for byte identical and installed beside it, agreed with it on 5 of 12 prompts; the fork with the
+  levers off also agrees on 5 of 12 with bae2023, and on 6 of 12 with that unpatched second copy.
+  Every divergence is mid-answer at a near-tie, "closely" against "tightly" or "divisors" against
+  "factors". Swapping the FlashInfer JIT build changed nothing, so each installation settles on its
+  own kernel numerics. The fork therefore differs from upstream no more than reinstalling upstream
+  does, which is also why every arm of an experiment should run from one installation.
+
+### The reasoning prompt
+
+`/tokenize` counted exactly what the server billed (153 prompt tokens, and 406 with tools), the
+rendered system turn carried the focused text, and all seven OpenAI effort levels answered 200,
+where the model's own template answers 400 to high, minimal and max. On thinking length it did
+nothing measurable: paired against the levers-off server over 24 answers to the harder prompts, the
+ratio is 0.97 with a 95% interval of [0.80, 1.16], the marker rates are unchanged, and the same
+three answers ran out of room.
+
+### The token penalty
+
+Twelve harder prompts (`bench/prompts_thinking_hard.jsonl`), two samples each, the same seed per
+prompt and sample in every configuration, paired against the levers-off server:
+
+| `THINK_PENALTY` | reasoning tokens vs off [95% CI] | markers per 1k reasoning tokens | ran out of room | tokens per step |
+|---|---|---|---|---|
+| off | — (5,552 mean, 2,453 median) | 1.32 | 3 of 24 | 4.01 |
+| 1.5 | 1.17 [0.87, 1.54] | 0.66 | 4 | 3.82 |
+| 3 | 1.07 [0.87, 1.36] | 0.27 | 5 | 3.88 |
+| 6 | 0.93 [0.78, 1.11] | 0.04 | 3 | 3.88 |
+| 100 (a ban) | **0.77 [0.63, 0.94]** | 0.00 | 2 | 4.08 |
+
+- The penalty removes what it aims at: "Wait" falls from 1.21 per 1,000 reasoning tokens to 0.62,
+  0.26, 0.04 and 0, as λ rises.
+- Only a ban shortens the thinking. At λ = 100 reasoning is about a quarter shorter, the interval
+  excludes 1, fewer answers run out of room, and tokens per step do not suffer. Below that the model
+  keeps thinking just as long and reaches for other words: at λ = 1.5, "Actually" rises from 0.65 to
+  0.85 and "Maybe" from 0.82 to 1.08.
+- Screening one more word at λ = 3 did not change that: adding "Actually" gives 1.20 [0.90, 1.60]
+  and adding "Maybe" 0.89 [0.65, 1.23], each suppressing its own word. Neither joins the default
+  list.
+- The answers keep the words at every λ: "Reply with exactly this text: Wait, Hmm, Alternatively,
+  Actually, Maybe." came back verbatim, and code still called `asyncio.wait` and `Condition.wait()`.
+- A request's own `thinking_token_budget` still wins with the penalty on: a budget of 32 capped
+  reasoning at 31 tokens.
+- Speed: greedy decode at C1 is 138.1 tok/s against 137.6 with the levers off (3.50 against 3.48
+  tokens per step), so the kernel itself costs nothing measurable. At default sampling one run each
+  read 120.9 against 125.9 tok/s, −4.0%, which is inside the spread of the runs themselves: the two
+  λ = 3 runs differed by 4.4% and the C2 cohort went the other way by 5.6%. Resolving 3% at default
+  sampling needs repeated runs.
+
+### What that means for the evals
+
+The mechanism works as designed, and on this model the setting worth evaluating is the ban, which
+is the shape NoWait reports. Whether a quarter less thinking costs accuracy is exactly what the
+paired evals have to answer, and Swift's fine-tune is the warning: it lost 3 to 5 points on hard
+math for a similar cut. So the pilot runs `focused` and λ = 100, with λ = 6 as a near-ban control,
+and not the soft penalties.
 
 ## How the levers are judged
 
@@ -223,4 +297,5 @@ it task by task. A lever succeeds if:
 - the reasoning loops on markers less, and
 - decode speed stays within 3% of the server with the levers off.
 
-If neither lever helps, this page will say so. Results: pending.
+If neither lever helps, this page will say so. The server-level measurements are above; the eval
+results are still to come.

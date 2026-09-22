@@ -42,7 +42,13 @@ default, and with none set the launcher's command line is upstream's, byte for b
 
 ## Results
 
-None yet. Each lever is measured with paired evals against the published baseline run of
+No eval results yet. The first server-level measurements are in
+[docs/thinking-levers.md](docs/thinking-levers.md): with the levers off this is upstream, at the
+speed upstream measures; the penalty removes the markers it targets, and only as a ban (λ = 100)
+does it shorten the thinking, by about a quarter on hard prompts, with fewer answers running out of
+room; the reasoning prompt alone changes neither.
+
+Each lever is measured with paired evals against the published baseline run of
 this stack ([run page](https://localinference.alexwoodka.com/runs/83638382-55b5-460b-a309-e80986a75c7d)),
 and it counts as a success only with no paired accuracy drop, fewer cut-off answers and
 decode speed within 3%. The numbers will land here and in
