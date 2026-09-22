@@ -1,8 +1,9 @@
 # Thinking levers
 
 This fork adds switches that steer how Qwen3.8-27B spends its thinking, without retraining
-it and without changing anything while they are off. This page covers the one that exists
-so far, the reasoning prompt (`REASONING_EFFORT`), and how the levers are judged.
+it and without changing anything while they are off. This page covers both, the reasoning
+prompt (`REASONING_EFFORT`) and the marker penalty (`THINK_PENALTY`), and how they are
+judged.
 
 ## Why
 
@@ -121,13 +122,87 @@ an exception. The fork's template agrees on those three names. It also maps none
 and it keeps the exception for names it does not know, so a typo fails loudly. It leaves
 the model's template on disk alone, and it is only served when `REASONING_EFFORT` is set.
 
-## Lever 2: a penalty on reflection markers (in progress)
+## Lever 2: a penalty on reflection markers (`THINK_PENALTY`)
 
-A vLLM patch that lowers the logits of a few reflection markers ("Wait", "Hmm",
-"Alternatively") while the model is inside `<think>`, and works with DFlash2 speculative
-decoding. It is the idea of NoWait ([arXiv 2506.08343](https://arxiv.org/abs/2506.08343))
-applied without fine-tuning. Expect a modest effect: Qwen3.8 rarely uses these words, with
-"Wait" at 1.36 and "Hmm" at 0.09 per 1,000 words of the baseline's LiveCodeBench reasoning.
+### What it changes
+
+While the model is inside its reasoning, vLLM subtracts `THINK_PENALTY` logits from the
+tokens of a few reflection markers: "Wait", "Hmm" and "Alternatively" by default, each as
+written and with a leading space, so six tokens. This is the idea of NoWait
+([arXiv 2506.08343](https://arxiv.org/abs/2506.08343)) applied without fine-tuning. The
+penalty comes before temperature, so the effect on the probabilities is λ/T (T is 1 at the
+model's default sampling), and before top-k/top-p, so a marker that was not clearly the
+model's choice drops out of the nucleus. At λ = 100 the markers are banned in practice,
+which is NoWait's setting.
+
+"Inside its reasoning" means that in the tokens before the position being scored, the last
+`<think>` comes after the last `</think>`. The answer after `</think>` is never penalized,
+and neither is anything with thinking off, a raw completion without markers, or an earlier
+turn of the conversation. A request that also sets `thinking_token_budget` gets both, and
+the budget still forces `</think>` when it runs out.
+
+It has to be a vLLM patch. Under speculative decoding vLLM rejects `logit_bias` and custom
+logits processors, `bad_words` would remove the words from code answers too, and the
+server has no way to default any of them. [`patches/think-penalty.patch`](../patches/think-penalty.patch)
+touches three files that no other patch touches:
+
+- `config/reasoning.py`: `think_penalty` and `think_penalty_words`, resolved to token ids at
+  startup. The kept and dropped forms are logged; a form must be one ordinary token (not a
+  special token, not a reasoning marker). An unpatched vLLM rejects the keys outright.
+- `v1/worker/gpu/sample/thinking_budget.py`: Model Runner V2 already tracks, per request,
+  where the last `<think>` and `</think>` are, including in the draft tokens each verify row
+  sees, but only for requests with a thinking budget. With the penalty on, a request without
+  a budget gets one it can never reach, so the tracking runs for every request and a reused
+  slot starts clean. A small Triton kernel after the budget kernels then penalizes each
+  logits row that is inside reasoning. Every verify row of a speculative step goes through
+  it, so DFlash2's output follows the penalized distribution exactly; the drafter is not
+  penalized, which can cost a little acceptance.
+- `config/vllm.py`: Model Runner V1 (`SPEC=mtp`) refuses the setting instead of silently
+  ignoring it.
+
+### Using it
+
+```bash
+THINK_PENALTY=3 SPEC=dflash2 PREFIX_CACHE=1 bash single-user/start_qwen.sh
+THINK_PENALTY=3 THINK_PENALTY_WORDS=Wait,Hmm,Alternatively,Actually SPEC=dflash2 bash single-user/start_qwen.sh
+```
+
+The launcher passes `--reasoning-config
+'{"think_penalty":3,"think_penalty_words":["Wait","Hmm","Alternatively"]}'`, and the server
+logs `Think penalty: -3.00 logits on 6 token ids inside reasoning`. It is a server setting
+that applies to every request inside its reasoning, with no per-request control, and it
+combines with `REASONING_EFFORT`. `THINK_PENALTY` runs from 0 (off) to 100, and the launcher
+refuses anything else, a word that is not letters and hyphens, and any `SPEC` other than
+`dflash2`.
+
+### The word list, from the baseline's reasoning
+
+In the baseline's LiveCodeBench reasoning (1.34 million words), sentence-initial "Wait"
+occurs 1.3 times per 1,000 words, "Actually" 1.1, "Hmm" 0.1 and "Alternatively" 0.04; in
+BFCL, "Hmm" is at 0.95. Per answer, "Wait", "Hmm" and "Alternatively" together come to 1.5
+per 1,000 words in the LiveCodeBench answers that were cut off, against 1.1 in the ones that
+finished, and "Maybe" to 1.3 against 0.6. Pooled over all words, the three barely differ
+(1.50 against 1.43), and many "Wait"s are genuine error catches. So expect a modest effect.
+The default stays the classic three, NoWait's kind of marker, and "Actually" and "Maybe"
+are screened on top of it.
+
+### Checks
+
+- `bench/test_think_penalty.py --cpu`: the config's validation; the six default ids with
+  the real tokenizer and qwen3 parser; multi-token forms, markers and special tokens
+  dropped. It runs the kernels in Triton's interpreter against a pure-Python reference: 14
+  named cases (inside reasoning, `</think>` as a middle draft, a committed `</think>`, a
+  thinking-off prompt, no markers, a reopened `<think>`, multi-turn history, a cold scan
+  across 1,024-token blocks, an exhausted budget plus the penalty, a mixed batch), a stale
+  marker cache, and 568 random multi-step decode scenarios. With the penalty off, logits
+  stay bitwise unchanged. Five deliberately broken kernels were each caught.
+- `bench/test_think_penalty.py --gpu`, under `lab gpu run`: the same cases with compiled
+  kernels, plus `ThinkingBudgetState` itself. The penalty reaches requests without a
+  budget, a reused slot starts clean for a shorter and a longer request, a real budget
+  still forces `</think>`, penalty 0 leaves logits bitwise unchanged, and the log line
+  appears. All 645 checks passed on the RTX 3090 on 2026-09-22.
+- `bench/test_launcher_args.sh`: the exact `--reasoning-config` for each setting, nothing at
+  0, and the refusals.
 
 ## How the levers are judged
 

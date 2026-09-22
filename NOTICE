@@ -34,3 +34,7 @@ Added or changed by this fork (changed lines are marked "(fork)")
   patches/think-penalty.patch, patches/series, bench/test_think_penalty.py
       A vLLM 0.28.0 patch (Apache-2.0, like vLLM) that subtracts think_penalty from a few
       reflection-marker tokens while the model is inside its reasoning, and its tests.
+  single-user/start_qwen.sh, bench/test_launcher_args.sh, README.md,
+  single-user/README.md, docs/thinking-levers.md, .env.example
+      The THINK_PENALTY and THINK_PENALTY_WORDS knobs that apply the patch, their test and
+      their docs.

@@ -27,13 +27,18 @@ default, and with none set the launcher's command line is upstream's, byte for b
   original raises, so OpenAI clients that send those no longer get a 400. For every input
   the model's template accepts, it renders the same bytes (`bench/test_chat_template.py`).
   How it works and how to use it: [docs/thinking-levers.md](docs/thinking-levers.md).
+- **`THINK_PENALTY=λ`**, a token-penalty lever. With
+  [`patches/think-penalty.patch`](patches/think-penalty.patch), vLLM subtracts λ logits from
+  a few reflection markers ("Wait", "Hmm" and "Alternatively" by default;
+  `THINK_PENALTY_WORDS` changes the list) while the model is inside `<think>`, and nowhere
+  else: not in the answer, not with thinking off. It works under DFlash2 speculative
+  decoding, where vLLM refuses `logit_bias` and custom logits processors, and it follows
+  NoWait (arXiv 2506.08343) without fine-tuning. `bench/test_think_penalty.py` checks it
+  against a reference, in Triton's interpreter on the CPU and compiled on the GPU.
 - **Two corrections to upstream's docs**, each checked on this stack:
   `thinking_token_budget` works on vLLM 0.28.0's V2 runner (the docs said it answers
   400), and `bench/run_benchmarks.sh` measures with thinking on, at xhigh (the README said
   off).
-
-A second lever, a logit penalty on reflection markers ("Wait", "Hmm", ...) that applies
-only inside `<think>`, is in progress.
 
 ## Results
 

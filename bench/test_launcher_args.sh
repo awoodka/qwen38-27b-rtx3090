@@ -101,6 +101,34 @@ order=$(awk 'prev == "--chat-template" { printf "%s ", $0 } { prev = $0 }' "$T/f
   || fail "[EXTRA_ARGS --chat-template] should come after the knob's: got $order"
 echo "REASONING_EFFORT levels: xhigh focused medium low checked"
 
+# THINK_PENALTY: exactly one --reasoning-config after the template flags; 0 adds nothing.
+eval "run up upstream $HOSTED"
+while IFS='|' read -r env json; do
+  eval "run fk fork $HOSTED $env"
+  if [ -z "$json" ]; then
+    cmp -s "$T/up.argv" "$T/fk.argv" || { fail "[$env] should equal upstream:"; diff "$T/up.argv" "$T/fk.argv" | head -6; }
+    continue
+  fi
+  case "$env" in
+    *REASONING_EFFORT=focused*) expect_with "$T/up.argv" --chat-template "$T/templates/qwen3.8-27b.jinja" \
+        --default-chat-template-kwargs '{"reasoning_effort":"focused"}' --reasoning-config "$json" > "$T/want.argv" ;;
+    *) expect_with "$T/up.argv" --reasoning-config "$json" > "$T/want.argv" ;;
+  esac
+  cmp -s "$T/want.argv" "$T/fk.argv" || { fail "[$env] argv is not upstream + the expected flags:"; diff "$T/want.argv" "$T/fk.argv" | head -8; }
+done <<'EOF'
+THINK_PENALTY=0|
+THINK_PENALTY=0.0|
+THINK_PENALTY=3|{"think_penalty":3,"think_penalty_words":["Wait","Hmm","Alternatively"]}
+THINK_PENALTY=1.5 THINK_PENALTY_WORDS=Wait,Hmm,Alternatively,Actually|{"think_penalty":1.5,"think_penalty_words":["Wait","Hmm","Alternatively","Actually"]}
+THINK_PENALTY=100 THINK_PENALTY_WORDS=Double-check,Wait,|{"think_penalty":100,"think_penalty_words":["Double-check","Wait"]}
+REASONING_EFFORT=focused THINK_PENALTY=6|{"think_penalty":6,"think_penalty_words":["Wait","Hmm","Alternatively"]}
+EOF
+run up upstream SPEC=off
+run fk fork SPEC=off VLLM_USE_V2_MODEL_RUNNER=1 THINK_PENALTY=3
+expect_with "$T/up.argv" --reasoning-config '{"think_penalty":3,"think_penalty_words":["Wait","Hmm","Alternatively"]}' > "$T/want.argv"
+cmp -s "$T/want.argv" "$T/fk.argv" || fail "[SPEC=off VLLM_USE_V2_MODEL_RUNNER=1 THINK_PENALTY=3] should be allowed"
+echo "THINK_PENALTY settings checked"
+
 # 3. Anything else refuses before vLLM starts.
 for bad in bogus high max minimal none XHIGH Focused " focused" "focused " "xhigh,low"; do
   run bad fork SPEC=dflash2 "REASONING_EFFORT=$bad"
@@ -109,6 +137,24 @@ for bad in bogus high max minimal none XHIGH Focused " focused" "focused " "xhig
   fi
 done
 echo "bad REASONING_EFFORT values refused"
+
+refuses() {   # refuses "<message part>" VAR=VALUE...
+  local msg=$1; shift
+  run bad fork "$@"
+  if [ "$(cat "$T/bad.rc")" != 1 ] || [ -e "$T/bad.argv" ] || ! grep -q -- "$msg" "$T/bad.out"; then
+    fail "[$*] expected exit 1 before vllm with '$msg', got rc=$(cat "$T/bad.rc"): $(tail -1 "$T/bad.out")"
+  fi
+}
+for bad in abc -1 1e3 .5 3. 03 100.5 101 " 3" "3 "; do
+  refuses "is not a number of logits" SPEC=dflash2 "THINK_PENALTY=$bad"
+done
+refuses "needs Model Runner V2" SPEC=mtp THINK_PENALTY=3
+refuses "needs Model Runner V2" THINK_PENALTY=3                    # the launcher's default SPEC is mtp
+refuses "needs Model Runner V2" SPEC=dflash2 CTX=bogus THINK_PENALTY=3   # falls back to mtp
+for words in "Wa it" "Wait,,Hmm" "Wait1" "</think>" "Wait;true" ",Wait"; do
+  refuses "is not a word" SPEC=dflash2 THINK_PENALTY=3 "THINK_PENALTY_WORDS=$words"
+done
+echo "bad THINK_PENALTY settings refused"
 
 echo "launcher args: $([ $FAILS = 0 ] && echo OK || echo "$FAILS FAILURES")"
 [ $FAILS = 0 ]

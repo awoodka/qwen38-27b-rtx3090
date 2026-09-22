@@ -1,8 +1,9 @@
 #!/bin/bash
 # Qwen3.8-27B on a single RTX 3090 — SINGLE USER / LOW LATENCY mode.
 #
-# Modified in Alex Woodka's thinking-levers fork (2026): the REASONING_EFFORT knob.
-# The fork's lines are marked "(fork)"; with the knob unset the argv is upstream's.
+# Modified in Alex Woodka's thinking-levers fork (2026): the REASONING_EFFORT and
+# THINK_PENALTY knobs. The fork's lines are marked "(fork)"; with the knobs unset the
+# argv is upstream's.
 #
 # Same base config as batch mode, plus MTP speculative decoding: the checkpoint
 # keeps Qwen's multi-token-prediction head, so the model drafts 3-4 tokens ahead
@@ -643,7 +644,7 @@ METRICS_ARGS=()
 # has no `focused`) or chat_template_kwargs {"reasoning_effort": ...} (which does).
 # Array, like METRICS_ARGS: the JSON stays one argument. The exec line expands it right
 # after --reasoning-parser qwen3 (a continued line cannot carry the marker), before
-# EXTRA_ARGS, so EXTRA_ARGS can still override either flag.
+# EXTRA_ARGS, so EXTRA_ARGS can still override any of its flags.
 REASONING_ARGS=()
 case "${REASONING_EFFORT:-}" in
   "") ;;
@@ -655,6 +656,40 @@ case "${REASONING_EFFORT:-}" in
          "(empty keeps the model's own chat template)." >&2
     exit 1 ;;
 esac
+# (fork) THINK_PENALTY, the token-penalty lever (patches/think-penalty.patch,
+# docs/thinking-levers.md): while the model is inside its reasoning, subtract
+# THINK_PENALTY logits, before temperature, from the tokens of THINK_PENALTY_WORDS (each
+# word as written and with a leading space). 0, the default, adds nothing. The patch is in
+# Model Runner V2 only, which here means SPEC=dflash2 (or VLLM_USE_V2_MODEL_RUNNER=1); it
+# refuses V1 itself, but saying so here beats a traceback.
+THINK_PENALTY=${THINK_PENALTY:-0}
+THINK_PENALTY_WORDS=${THINK_PENALTY_WORDS:-Wait,Hmm,Alternatively}
+if ! [[ $THINK_PENALTY =~ ^(0|[1-9][0-9]*)([.][0-9]+)?$ ]] \
+   || ! awk -v p="$THINK_PENALTY" 'BEGIN { exit !(p <= 100) }'; then
+  echo "THINK_PENALTY=$THINK_PENALTY is not a number of logits from 0 to 100 (0 = off)." >&2
+  exit 1
+fi
+if ! [[ $THINK_PENALTY =~ ^0([.]0+)?$ ]]; then
+  if [ "$SPEC" != dflash2 ] && [ "${VLLM_USE_V2_MODEL_RUNNER:-}" != 1 ]; then
+    echo "THINK_PENALTY needs Model Runner V2 (SPEC=dflash2); SPEC=$SPEC runs V1, which" \
+         "patches/think-penalty.patch does not touch." >&2
+    exit 1
+  fi
+  WORDS_JSON=""
+  IFS=, read -ra _words <<< "$THINK_PENALTY_WORDS"
+  for w in "${_words[@]}"; do
+    if ! [[ $w =~ ^[A-Za-z][A-Za-z-]*$ ]]; then
+      echo "THINK_PENALTY_WORDS: '$w' is not a word (letters and hyphens, comma-separated)." >&2
+      exit 1
+    fi
+    WORDS_JSON+="${WORDS_JSON:+,}\"$w\""
+  done
+  if [ -z "$WORDS_JSON" ]; then
+    echo "THINK_PENALTY_WORDS is empty." >&2
+    exit 1
+  fi
+  REASONING_ARGS+=(--reasoning-config "{\"think_penalty\":$THINK_PENALTY,\"think_penalty_words\":[$WORDS_JSON]}")
+fi
 
 # Vision. --language-model-only drops the vision tower cleanly -- no weights loaded,
 # 0.858 GiB on this checkpoint (gotcha 9) -- and stays the default. VISION=1 keeps
