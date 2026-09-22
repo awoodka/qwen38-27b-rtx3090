@@ -13,11 +13,15 @@ and `report` turns all of it into summary.md and summary.json.
   budget  --tag T                     thinking_token_budget still caps the reasoning
   render  --tag T [--expect LEVEL]    /tokenize counts what the server bills, the rendered system
                                       turn carries LEVEL's instruction, every top-level effort is 200
+  paired  [--baseline T]              the rates runs in --out-dir against one of them, prompt by prompt:
+                                      the same seeds ran in every config, so the ratios are paired
   report                              summary.md and summary.json from everything in --out-dir
 """
 import argparse
 import concurrent.futures
 import json
+import math
+import random
 import re
 import statistics
 import sys
@@ -254,6 +258,50 @@ def cmd_render(srv, args):
     return 0 if passed else 1
 
 
+def cmd_paired(args):
+    """Every rates run in --out-dir against the baseline one, paired by (prompt, sample).
+
+    Each configuration answered the same prompts under the same seeds, so a ratio per pair is the
+    cleanest reading of what a lever did to the length of the thinking; the interval is a bootstrap
+    over pairs of the mean log ratio.
+    """
+    runs = {}
+    for path in sorted(args.out_dir.glob("rates-*.jsonl")):
+        runs[path.name[len("rates-"):-len(".jsonl")]] = {(r["id"], r["sample"]): r for r in map(json.loads, open(path))}
+    if args.baseline not in runs:
+        print(f"no rates run tagged {args.baseline!r} in {args.out_dir}")
+        return 2
+    base = runs[args.baseline]
+    def by_penalty(tag):   # p1.5 < p3 < p6 < p100, then the screens that add a word
+        head = tag[1:].split("-")[0]
+        return (float(head) if head.replace(".", "", 1).isdigit() else 1e9, tag)
+
+    order = ["off", "focused"] + sorted((t for t in runs if t.startswith("p")), key=by_penalty)
+    rows = ["| config | mean reasoning tokens | median | paired ratio vs " + args.baseline + " [95% CI] | ran out of room | "
+            "markers per 1k reasoning tokens | " + " | ".join(MARKERS) + " | tokens per step |",
+            "|---|---|---|---|---|---|" + "---|" * len(MARKERS) + "---|"]
+    for tag in [t for t in order if t in runs] + [t for t in runs if t not in order]:
+        run = runs[tag]
+        keys = sorted(set(run) & set(base))
+        logs = [math.log(max(run[k]["reasoning_tokens"] or 1, 1) / max(base[k]["reasoning_tokens"] or 1, 1)) for k in keys]
+        rng = random.Random(0)
+        boots = sorted(statistics.fmean([rng.choice(logs) for _ in logs]) for _ in range(4000)) if len(logs) > 1 else []
+        ratio = ("-" if tag == args.baseline or not logs else
+                 f"{math.exp(statistics.fmean(logs)):.2f} [{math.exp(boots[100]):.2f}, {math.exp(boots[3899]):.2f}]")
+        toks = sum(r["reasoning_tokens_retokenized"] for r in run.values()) or 1
+        per_1k = {w: 1000 * sum(r["marker_tokens"][w] for r in run.values()) / toks for w in MARKERS}
+        lengths = [r["reasoning_tokens"] or 0 for r in run.values()]
+        agg = load(args.out_dir, f"rates-{tag}.json") or {}
+        rows.append(f"| {tag} | {statistics.fmean(lengths):.0f} | {statistics.median(lengths):.0f} | {ratio} | "
+                    f"{sum(r['finish_reason'] == 'length' for r in run.values())} of {len(run)} | "
+                    f"{sum(per_1k[w] for w in DEFAULT_SET):.2f} | " + " | ".join(f"{per_1k[w]:.2f}" for w in MARKERS)
+                    + f" | {agg.get('tokens_per_step')} |")
+    out = "\n".join(rows) + "\n"
+    (args.out_dir / "paired.md").write_text(out)
+    print(out, end="")
+    return 0
+
+
 # -- report ---------------------------------------------------------------------------------------
 
 def bench_c1(out_dir, tag, run=2):
@@ -335,7 +383,7 @@ def cmd_report(args):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["greedy", "rates", "content", "budget", "render", "report"])
+    ap.add_argument("command", choices=["greedy", "rates", "content", "budget", "render", "paired", "report"])
     ap.add_argument("--out-dir", type=Path, required=True)
     ap.add_argument("--tag")
     ap.add_argument("--compare", nargs="*")
@@ -347,6 +395,7 @@ def main():
     ap.add_argument("--max-tokens", type=int, default=16384)
     ap.add_argument("--prompts", type=Path, default=None,
                     help="a JSONL of {id, prompt} for greedy and rates (default bench/prompts_thinking.jsonl)")
+    ap.add_argument("--baseline", default="off", help="paired: the rates run the others are compared with")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=18020)
     args = ap.parse_args()
@@ -356,6 +405,8 @@ def main():
         PROMPTS = args.prompts
     if args.command == "report":
         return cmd_report(args)
+    if args.command == "paired":
+        return cmd_paired(args)
     if not args.tag:
         ap.error(f"{args.command} needs --tag")
     srv = Server(args.host, args.port)

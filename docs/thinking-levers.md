@@ -241,7 +241,9 @@ three answers ran out of room.
 ### The token penalty
 
 Twelve harder prompts (`bench/prompts_thinking_hard.jsonl`), two samples each, the same seed per
-prompt and sample in every configuration, paired against the levers-off server:
+prompt and sample in every configuration, paired against the levers-off server
+(`bench/thinking_levers.py paired --out-dir <results dir>` prints this table, with a bootstrap
+interval over the pairs):
 
 | `THINK_PENALTY` | reasoning tokens vs off [95% CI] | markers per 1k reasoning tokens | ran out of room | tokens per step |
 |---|---|---|---|---|
