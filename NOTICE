@@ -25,3 +25,6 @@ Added or changed by this fork (changed lines are marked "(fork)")
       shipped in dbirks/Qwen3.8-27B-W4A16-AutoRound: it adds the reasoning_effort level
       'focused', and takes max/high as xhigh and minimal/none as low instead of raising.
       The test checks that it renders like the original wherever the original works.
+  single-user/start_qwen.sh, bench/test_launcher_args.sh, README.md,
+  single-user/README.md, docs/thinking-levers.md, .env.example
+      The REASONING_EFFORT knob that serves that template, its test and its docs.

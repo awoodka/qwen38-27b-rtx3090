@@ -9,6 +9,25 @@
 > thinking. Below the line, this is upstream's README at `bae2023`, with the fork's edits
 > marked (fork).
 
+## What this fork changes
+
+Qwen3.8 can think for a very long time, and a think that runs out of room scores as a
+wrong answer. In a quick-tier eval of this exact stack (Qwen3.8-27B W4A16 with DFlash2,
+250 W, a 5-minute budget per task), 73 answers were cut off, while the answers that
+finished passed at 88% on LiveCodeBench, 93% on GPQA Diamond and 97% on AIME 2025. The
+levers aim to turn those cut-offs into answers without giving up depth. Each is off by
+default, and with none set the launcher's command line is upstream's, byte for byte
+(`bench/test_launcher_args.sh`).
+
+- **`REASONING_EFFORT=focused`**, a reasoning-prompt lever for `single-user/start_qwen.sh`.
+  The launcher serves [`templates/qwen3.8-27b.jinja`](templates/qwen3.8-27b.jinja): the
+  model's chat template plus a `focused` level that keeps xhigh's depth but asks the model
+  to check each step once, commit to an approach and stop re-verifying settled work. The
+  template also takes `max`/`high` as xhigh and `minimal`/`none` as low where the
+  original raises, so OpenAI clients that send those no longer get a 400. For every input
+  the model's template accepts, it renders the same bytes (`bench/test_chat_template.py`).
+  How it works and how to use it: [docs/thinking-levers.md](docs/thinking-levers.md).
+
 A second lever, a logit penalty on reflection markers ("Wait", "Hmm", ...) that applies
 only inside `<think>`, is in progress.
 

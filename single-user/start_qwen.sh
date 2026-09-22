@@ -1,6 +1,9 @@
 #!/bin/bash
 # Qwen3.8-27B on a single RTX 3090 — SINGLE USER / LOW LATENCY mode.
 #
+# Modified in Alex Woodka's thinking-levers fork (2026): the REASONING_EFFORT knob.
+# The fork's lines are marked "(fork)"; with the knob unset the argv is upstream's.
+#
 # Same base config as batch mode, plus MTP speculative decoding: the checkpoint
 # keeps Qwen's multi-token-prediction head, so the model drafts 3-4 tokens ahead
 # and verifies them in one pass. Measured on realistic chat prompts with the
@@ -629,6 +632,30 @@ TOOL_ARGS=()
 METRICS_ARGS=()
 [ "${REQ_METRICS:-0}" = 1 ] && METRICS_ARGS=(--enable-per-request-metrics --enable-force-include-usage)
 
+# (fork) REASONING_EFFORT, the reasoning-prompt lever (README "What this fork changes",
+# docs/thinking-levers.md). Empty, the default, keeps the model's own chat template and
+# exactly upstream's argv. xhigh|focused|medium|low serves templates/qwen3.8-27b.jinja
+# instead -- the model's template plus a `focused` level, with max/high and minimal/none
+# accepted as xhigh and low rather than raising -- and makes that level the server-side
+# default. For every input the model's template accepts it renders the same bytes
+# (bench/test_chat_template.py), so REASONING_EFFORT=xhigh serves what empty does. A
+# request's own effort still wins over the default: the top-level reasoning_effort (which
+# has no `focused`) or chat_template_kwargs {"reasoning_effort": ...} (which does).
+# Array, like METRICS_ARGS: the JSON stays one argument. The exec line expands it right
+# after --reasoning-parser qwen3 (a continued line cannot carry the marker), before
+# EXTRA_ARGS, so EXTRA_ARGS can still override either flag.
+REASONING_ARGS=()
+case "${REASONING_EFFORT:-}" in
+  "") ;;
+  xhigh|focused|medium|low)
+    REASONING_ARGS=(--chat-template "$REPO/templates/qwen3.8-27b.jinja"
+                    --default-chat-template-kwargs "{\"reasoning_effort\":\"$REASONING_EFFORT\"}") ;;
+  *)
+    echo "REASONING_EFFORT=$REASONING_EFFORT is not a level: xhigh, focused, medium or low" \
+         "(empty keeps the model's own chat template)." >&2
+    exit 1 ;;
+esac
+
 # Vision. --language-model-only drops the vision tower cleanly -- no weights loaded,
 # 0.858 GiB on this checkpoint (gotcha 9) -- and stays the default. VISION=1 keeps
 # the tower, for a client that sends images: screenshots into a coding assistant,
@@ -741,6 +768,7 @@ exec venv/bin/vllm serve "$MODEL" \
   "${SPEC_ARGS[@]}" \
   --compilation-config "{\"max_cudagraph_capture_size\":$CG,\"custom_ops\":[\"+rms_norm\",\"+silu_and_mul\"]${CG_MODE}}" \
   --reasoning-parser qwen3 \
+  "${REASONING_ARGS[@]}" \
   --enable-prompt-tokens-details \
   "${METRICS_ARGS[@]}" \
   "${TOOL_ARGS[@]}" \
