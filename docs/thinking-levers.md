@@ -167,6 +167,9 @@ THINK_PENALTY=3 SPEC=dflash2 PREFIX_CACHE=1 bash single-user/start_qwen.sh
 THINK_PENALTY=3 THINK_PENALTY_WORDS=Wait,Hmm,Alternatively,Actually SPEC=dflash2 bash single-user/start_qwen.sh
 ```
 
+Measured below: only `THINK_PENALTY=100`, a ban in practice, shortens the thinking; lower
+values remove the words and the model says others instead.
+
 The launcher passes `--reasoning-config
 '{"think_penalty":3,"think_penalty_words":["Wait","Hmm","Alternatively"]}'`, and the server
 logs `Think penalty: -3.00 logits on 6 token ids inside reasoning`. It is a server setting

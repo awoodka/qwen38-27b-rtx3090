@@ -5,9 +5,12 @@
 > [syv-ai/HyperQwen](https://github.com/syv-ai/HyperQwen)), branched at
 > [`bae2023`](https://github.com/syv-ai/qwen38-27b-rtx3090/tree/bae2023ffc98753d337d2d2041784a277599a4c4).
 > The serving stack, its vLLM patches and its measurements are upstream's work
-> ([Credits](#credits)). The fork adds opt-in levers that steer how Qwen3.8 spends its
-> thinking. Below the line, this is upstream's README at `bae2023`, with the fork's edits
-> marked (fork).
+> ([Credits](#credits)). The fork adds two opt-in levers that steer how Qwen3.8 spends its
+> thinking: a focused reasoning level in the chat template, and a vLLM sampler patch, with
+> its own Triton kernel, that penalizes reflection words like "Wait" and "Hmm" while the
+> model thinks, under speculative decoding. As a ban, the penalty cuts thinking by about a
+> quarter on hard prompts at no cost in speed ([Results](#results)). Below the line, this is
+> upstream's README at `bae2023`, with the fork's edits marked (fork).
 
 ## What this fork changes
 
@@ -39,19 +42,58 @@ default, and with none set the launcher's command line is upstream's, byte for b
   `thinking_token_budget` works on vLLM 0.28.0's V2 runner (the docs said it answers
   400), and `bench/run_benchmarks.sh` measures with thinking on, at xhigh (the README said
   off).
+- **A live-server harness** (`bench/thinking_levers_session.sh`, `bench/thinking_levers.py`):
+  one unattended GPU session that checks each lever on a running server (parity with
+  upstream, exact prompt accounting, that the answers keep the penalized words, speed) and
+  measures what it does to the thinking, paired prompt by prompt against the levers off.
+
+```bash
+REASONING_EFFORT=focused SPEC=dflash2 PREFIX_CACHE=1 bash single-user/start_qwen.sh
+THINK_PENALTY=100 SPEC=dflash2 PREFIX_CACHE=1 bash single-user/start_qwen.sh
+```
 
 ## Results
 
-No eval results yet. The first server-level measurements are in
-[docs/thinking-levers.md](docs/thinking-levers.md): with the levers off this is upstream, at the
-speed upstream measures; the penalty removes the markers it targets, and only as a ban (λ = 100)
-does it shorten the thinking, by about a quarter on hard prompts, with fewer answers running out of
-room; the reasoning prompt alone changes neither.
+### So far: what each lever does to the thinking
 
-Each lever is measured with paired evals against the published baseline run of
-this stack ([run page](https://localinference.alexwoodka.com/runs/83638382-55b5-460b-a309-e80986a75c7d)),
-and it counts as a success only with no paired accuracy drop, fewer cut-off answers and
-decode speed within 3%. The numbers will land here and in
+These are server-level measurements, not evals: they show what each lever does to the
+model's thinking, not yet whether the answers get better. On an RTX 3090 at 250 W with
+DFlash2, twelve hard prompts were answered twice each, with the same seeds in every
+configuration, and paired with the levers off
+([the full write-up](docs/thinking-levers.md#first-measurements-2026-09-22)):
+
+| Setting | Thinking length vs levers off [95% CI] | "Wait", "Hmm", "Alternatively" per 1k thinking tokens | Ran out of room | Tokens per step |
+|---|---|---|---|---|
+| levers off | — (5,552 tokens on average) | 1.32 | 3 of 24 | 4.01 |
+| `REASONING_EFFORT=focused` | 0.97 [0.80, 1.16] | 1.34 | 3 of 24 | 4.01 |
+| `THINK_PENALTY=3` | 1.07 [0.87, 1.36] | 0.27 | 5 of 24 | 3.88 |
+| `THINK_PENALTY=6` | 0.93 [0.78, 1.11] | 0.04 | 3 of 24 | 3.88 |
+| `THINK_PENALTY=100` (a ban) | **0.77 [0.63, 0.94]** | 0.00 | 2 of 24 | 4.08 |
+
+- The penalty removes the words it targets at every strength, but only a ban shortens the
+  thinking: by about a quarter, with fewer answers running out of room. Below that, the
+  model keeps thinking just as long and says "Actually" or "Maybe" instead.
+- The answers keep the penalized words ("Wait" in prose, `asyncio.wait` in code): the
+  penalty acts only inside the thinking.
+- Neither lever costs speed. With thinking on, greedy decode measured 138.1 tok/s at
+  `THINK_PENALTY=3` against 137.6 with the levers off, and the ban keeps its tokens per step
+  (table); in the lab's chat benchmark (thinking off) the four eval
+  configs, levers off, focused, and the penalty at 6 and 100, decode within 1% of each other.
+- The focused prompt alone didn't change how long the model thinks.
+- With the levers off, the launcher runs upstream's exact command at upstream's speed.
+
+### Next: evals
+
+Evals are running now: first a pilot on part of AIME 2025 and LiveCodeBench, then GPQA
+Diamond and LiveCodeBench in full for the settings that hold up, with the published
+quick-tier method of [Local Inference](https://localinference.alexwoodka.com/methodology).
+Each setting is judged against this fork with its levers off, on the same installation and in
+the same week, and also against the published baseline run of this stack
+([run page](https://localinference.alexwoodka.com/runs/83638382-55b5-460b-a309-e80986a75c7d)).
+The fork's speed runs came out about 3% faster than the baseline's, and a task's token
+allowance scales with measured speed, so the baseline comparison alone would favour the
+levers. A lever counts as a success only with no paired accuracy drop, fewer cut-off answers
+and decode speed within 3%. The numbers will land here and in
 [docs/thinking-levers.md](docs/thinking-levers.md).
 
 ## Credits
