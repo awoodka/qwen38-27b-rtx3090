@@ -129,8 +129,12 @@ happens when the streams are big. Where it is *not* the better choice:
   114,224 at 15 — by moving to an `int8_per_token_head` cache on the Triton backend; it is
   worth it only for context reproduction, and `SPEC=mtp CTX=long` beats it about 2:1 on
   everything else. See [docs/long-context.md](../docs/long-context.md#dflash2-past-64k-specdflash2-ctxlong).
-- The V2 runner rejects the `thinking_token_budget` request parameter (HTTP
-  400); everything else we use (logprobs, prompt_logprobs, n, stop, seeds,
+- (fork) The V2 runner honours the `thinking_token_budget` request parameter in
+  vLLM 0.28.0 (`v1/worker/gpu/sample/thinking_budget.py`); it was the 0.27.1 backport
+  that answered 400. On this stack (`SPEC=dflash2`, 2026-09-22) a budget of 32 came back
+  200 with 31 reasoning tokens, against 113 for the same prompt without one. The cut is
+  hard: the end of thinking is forced mid-sentence, and the model may finish the thought
+  in its answer. Everything else we use (logprobs, prompt_logprobs, n, stop, seeds,
   structured outputs, penalties, streaming, thinking) was checked
   (`bench/api_smoke.py`-style run, 12/12). Quality unchanged by construction
   (speculation is exact): perplexity 8.094, GSM8K 96.0% on the fast variant.

@@ -28,3 +28,6 @@ Added or changed by this fork (changed lines are marked "(fork)")
   single-user/start_qwen.sh, bench/test_launcher_args.sh, README.md,
   single-user/README.md, docs/thinking-levers.md, .env.example
       The REASONING_EFFORT knob that serves that template, its test and its docs.
+  README.md, single-user/README.md, docs/gotchas.md, bench/api_smoke.py
+      Corrections: thinking_token_budget works on vLLM 0.28.0's V2 runner, and
+      bench/run_benchmarks.sh measures with thinking on.

@@ -173,10 +173,12 @@ Things that each cost us hours, in rough order of pain. Worth skimming before yo
     the *same* config — three ways to get a server that either wastes a quarter
     of its pool or dies mid-request. `patches/hybrid-kv-groups-v2-cudagraph.patch`
     fixes the first two; for the third, pin the pool in bytes
-    (`--kv-cache-memory`, what `KV_MEM` does) instead of tuning utilization. That
-    runner also answers `thinking_token_budget` with 400, and the first request
-    after a cold start JIT-compiles four Triton kernels (~5 s once; cached in
-    `~/.triton`).
+    (`--kv-cache-memory`, what `KV_MEM` does) instead of tuning utilization. On
+    that runner the first request after a cold start JIT-compiles four Triton
+    kernels (~5 s once; cached in `~/.triton`). (fork: this used to add that the
+    runner answers `thinking_token_budget` with 400, which held for the 0.27.1
+    backport but not for 0.28.0, which enforces the budget;
+    `single-user/README.md` has the measurement.)
 16. **`INT8_LAYERS=.` needs `GPU_UTIL=0.95`.** Quantizing the activations of every linear
     layer (rather than just the MLP) is worth ~11% throughput — 1,042 vs 942 tok/s at 64
     concurrent — but the extra per-layer scratch no longer fits batch mode's 0.972: the

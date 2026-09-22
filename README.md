@@ -27,6 +27,10 @@ default, and with none set the launcher's command line is upstream's, byte for b
   original raises, so OpenAI clients that send those no longer get a 400. For every input
   the model's template accepts, it renders the same bytes (`bench/test_chat_template.py`).
   How it works and how to use it: [docs/thinking-levers.md](docs/thinking-levers.md).
+- **Two corrections to upstream's docs**, each checked on this stack:
+  `thinking_token_budget` works on vLLM 0.28.0's V2 runner (the docs said it answers
+  400), and `bench/run_benchmarks.sh` measures with thinking on, at xhigh (the README said
+  off).
 
 A second lever, a logit penalty on reflection markers ("Wait", "Hmm", ...) that applies
 only inside `<think>`, is in progress.
@@ -706,7 +710,8 @@ that publishes cohort benchmarks for this model on this card. Theirs are 1,024-t
 answers from 29-34-token prompts, greedy, MTP3, int8 KV, prefix reuse off, an
 8,192-token context window, and **thinking on** at `reasoning_effort=medium`, so their
 1,024 tokens include reasoning. Ours are 8 realistic chat prompts (English, Danish,
-code), 1,024-token answers, model-default sampling, thinking off:
+code), 1,024-token answers, model-default sampling, and thinking on as well, at the
+template's default `xhigh` (a fork correction; see the note under the table):
 
 | Cohort | ninfer-3090 (MTP3) | this repo, batch | single-user, MTP | single-user, DFlash2 |
 |---|---|---|---|---|
@@ -725,6 +730,15 @@ DFlash2 residency ceiling bites earlier and this cell reads ~324 tok/s with a
 prompted the re-measurement. C1–C4 read the same or slightly better than the
 table. One card, many concurrent users: `SPEC=mtp` remains the right mode.
 
+(fork) Correction, 2026-09-22: this section said our side runs with thinking off. It
+does not: `bench/run_benchmarks.sh` sends the cohort prompts through
+`vllm bench serve --dataset-name custom` to `/v1/completions`, which renders the model's
+chat template on the client with no kwargs, so every prompt carries xhigh's instruction
+and ends in an open `<think>` block. That is 1,130 prompt tokens for the 8 prompts, the
+"Total input tokens" the bench log reports, against 810 with `enable_thinking=false`. The
+rates were always measured this way, so only the label changes: like ninfer's, our 1,024
+tokens include reasoning.
+
 Decode rate, C × 1000 / mean TPOT. All four of our columns were re-measured together
 on the current stack with `bench/run_benchmarks.sh`, keeping the second run after each
 restart as the script advises; greedy instead of default sampling reads
@@ -736,7 +750,8 @@ Theirs is the **decode** column of their table; their end-to-end column reads
 70.19 / 89.43 / 97.89 / 161.28, and an earlier version of this table quoted *those*
 against our decode rate, which was not like-for-like. What still is not like-for-like,
 in their favour and ours: their C1 is a single prompt in a single run with no error
-bars, thinking is on for them and off for us, and they publish no power limit or driver
+bars, thinking is on for both but at `medium` for them and `xhigh` for us (the fork
+correction above), and they publish no power limit or driver
 version — ours is an RTX 3090 pinned at 250 W. Peak VRAM is comparable (23.0 vs
 22.1 GiB at C8). The gap is mostly vLLM's continuous batching plus the memory this
 repo's requantization frees up.
