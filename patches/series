@@ -51,3 +51,5 @@ engine-stall-sentinel.patch
 sse-keep-alive.patch
 int4-mq3d-envs.patch
 triton-spec-attn-fp8-kv.patch
+# (fork) thinking-levers: THINK_PENALTY (docs/thinking-levers.md); touches no file another patch touches
+think-penalty.patch

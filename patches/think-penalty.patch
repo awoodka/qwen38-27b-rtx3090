@@ -1,0 +1,466 @@
+Think penalty: while a request is inside its reasoning, subtract a fixed number of logits from
+a few reflection-marker tokens ("Wait", "Hmm", "Alternatively"), on Model Runner V2 and under
+speculative decoding (vLLM 0.28.0).
+
+This is the THINK_PENALTY lever of the thinking-levers fork (single-user/start_qwen.sh,
+docs/thinking-levers.md): the idea of NoWait (arXiv 2506.08343) applied at inference time,
+without fine-tuning. It has to be a patch. Under speculative decoding vLLM rejects logit_bias
+and custom logits processors, and bad_words would ban the words everywhere, code answers
+included.
+
+ - config/reasoning.py: `think_penalty` (logits; 0 = off, at most 100) and
+   `think_penalty_words` on --reasoning-config. Each word, as written and with one leading
+   space, must be a single ordinary token: not a special token, not a reasoning marker. The
+   kept and dropped forms are logged. Nothing kept, a penalty without reasoning markers, or a
+   value out of range refuses to start, and an unpatched vLLM rejects the keys outright.
+ - config/vllm.py: refuses think_penalty on Model Runner V1, whose sampler this does not
+   touch (SPEC=mtp runs V1; SPEC=dflash2 forces V2).
+ - v1/worker/gpu/sample/thinking_budget.py: with the penalty on, a request without a
+   thinking_token_budget gets one it can never reach (INT32_MAX). The existing marker tracking
+   then runs for every request, and every new request resets its slot's marker cache, so a
+   reused slot never carries the previous request's markers. A new kernel runs right after
+   the budget kernels, one program per logits row: it repeats their draft-prefix marker scan
+   and, if the row is inside reasoning, subtracts the penalty from the penalty tokens' logits.
+   That is before temperature (the effect is penalty / T) and before top-k/top-p.
+
+Every verify row goes through it, so speculative decoding stays exact with respect to the
+penalized distribution; drafts are not penalized, which costs a little acceptance and no
+correctness. A real thinking_token_budget still wins: it forces the end marker with a logit of
+1e9. Nothing is penalized with thinking off, after </think>, in a raw completion without
+markers, or in past turns, and with think_penalty 0 nothing runs. bench/test_think_penalty.py
+checks it against a reference, in Triton's interpreter on the CPU and compiled on the GPU.
+
+Author: Alex Woodka, 2026, for the thinking-levers fork of syv-ai/qwen38-27b-rtx3090. Applies to
+vLLM 0.28.0 as the last line of patches/series and touches no file another patch touches.
+Apache-2.0, like vLLM.
+
+Apply from the repo root:
+  patch -p1 -d venv/lib/python3.12/site-packages/vllm < patches/think-penalty.patch
+
+diff --git a/config/reasoning.py b/config/reasoning.py
+index 0ac93be..d9b5814 100644
+--- a/config/reasoning.py
++++ b/config/reasoning.py
+@@ -1,13 +1,47 @@
+ # SPDX-License-Identifier: Apache-2.0
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+ 
++import math
++from collections.abc import Iterable
+ from dataclasses import field
+ 
+ from vllm.config.model import ModelConfig
+ from vllm.config.utils import config
++from vllm.logger import init_logger
+ from vllm.reasoning import ReasoningParserManager
+ from vllm.tokenizers import cached_tokenizer_from_config
+ 
++logger = init_logger(__name__)
++
++# (fork) The largest think_penalty accepted. Far below it the marker is already gone,
++# so the bound only keeps a typo from reading as a setting.
++THINK_PENALTY_MAX = 100.0
++
++
++def resolve_think_penalty_token_ids(
++    tokenizer, words: Iterable[str], reserved_ids: Iterable[int]
++) -> tuple[list[int], dict[str, int], list[str]]:
++    """(fork) The token ids the think penalty applies to.
++
++    Each word is tried as written and with one leading space. A form is kept only
++    if it encodes to exactly one token that is neither a special token nor one of
++    `reserved_ids` (the reasoning markers). Returns the sorted unique ids, the kept
++    {form: id}, and a description of every dropped form.
++    """
++    reserved = set(reserved_ids) | set(getattr(tokenizer, "all_special_ids", None) or [])
++    kept: dict[str, int] = {}
++    dropped: list[str] = []
++    for word in words:
++        for form in (word, " " + word):
++            ids = tokenizer.encode(form, add_special_tokens=False)
++            if len(ids) != 1:
++                dropped.append(f"{form!r} ({len(ids)} tokens)")
++            elif ids[0] in reserved:
++                dropped.append(f"{form!r} (a special token or reasoning marker)")
++            else:
++                kept[form] = ids[0]
++    return sorted(set(kept.values())), kept, dropped
++
+ 
+ @config
+ class ReasoningConfig:
+@@ -25,6 +59,16 @@ class ReasoningConfig:
+     """String that indicates the start of reasoning."""
+     reasoning_end_str: str = ""
+     """String forced when the thinking budget is exhausted."""
++    think_penalty: float = 0.0
++    """(fork) Logits subtracted, before temperature, from the tokens of
++    `think_penalty_words` while a request is inside its reasoning (after its last
++    reasoning start marker, before a natural end marker), for every request.
++    0 turns it off; at most 100, which is a ban in practice. Model Runner V2 only
++    (v1/worker/gpu/sample/thinking_budget.py)."""
++    think_penalty_words: list[str] = field(default_factory=list)
++    """(fork) The words `think_penalty` applies to, each as written and with one
++    leading space. A form that is not exactly one ordinary token is dropped, and
++    the drop is logged."""
+ 
+     _reasoning_start_token_ids: list[int] | None = field(
+         default=None, init=False, repr=False
+@@ -40,10 +84,34 @@ class ReasoningConfig:
+     )
+     """Token IDs that naturally terminate reasoning, as defined by the parser."""
+ 
++    _think_penalty_token_ids: list[int] | None = field(
++        default=None, init=False, repr=False
++    )
++    """(fork) Private backing field for `think_penalty_token_ids`."""
++
+     _enabled: bool = field(default=False, init=False, repr=False)
+     """Private field indicating whether reasoning token IDs have been initialized.
+     Set to True by `initialize_token_ids` once token IDs are initialized."""
+ 
++    def __post_init__(self) -> None:
++        # (fork) Refuse a bad penalty when the config is built, not at the first request.
++        if not (
++            math.isfinite(self.think_penalty)
++            and 0.0 <= self.think_penalty <= THINK_PENALTY_MAX
++        ):
++            raise ValueError(
++                f"think_penalty={self.think_penalty} must be a number of logits in "
++                f"[0, {THINK_PENALTY_MAX:g}] (0 turns it off)."
++            )
++        if self.think_penalty > 0 and not self.think_penalty_words:
++            raise ValueError("think_penalty > 0 needs think_penalty_words.")
++
++    @property
++    def think_penalty_token_ids(self) -> list[int] | None:
++        """(fork) Token ids of `think_penalty_words`, resolved by
++        `initialize_token_ids` when `think_penalty` is on."""
++        return self._think_penalty_token_ids
++
+     @property
+     def enabled(self) -> bool:
+         """Returns True if reasoning is enabled (i.e. if token IDs have been
+@@ -74,6 +142,7 @@ class ReasoningConfig:
+             and self._natural_reasoning_end_token_ids is not None
+         ):
+             self._enabled = True
++            self._initialize_think_penalty(model_config)  # (fork)
+             return  # Already initialized
+ 
+         tokenizer = cached_tokenizer_from_config(model_config=model_config)
+@@ -100,6 +169,11 @@ class ReasoningConfig:
+         if not reasoning_start_str or not reasoning_end_str:
+             # If we don't have valid strings to tokenize,
+             # we can't initialize the token IDs.
++            if self.think_penalty > 0:  # (fork) never a silent no-op
++                raise ValueError(
++                    "think_penalty needs the reasoning start and end markers: set "
++                    "--reasoning-parser (or reasoning_start_str/reasoning_end_str)."
++                )
+             return
+         self._reasoning_start_token_ids = tokenizer.encode(
+             reasoning_start_str, add_special_tokens=False
+@@ -123,3 +197,31 @@ class ReasoningConfig:
+                 "Ensure the strings are valid tokens in the model's vocabulary."
+             )
+         self._enabled = True
++        self._initialize_think_penalty(model_config, tokenizer)  # (fork)
++
++    def _initialize_think_penalty(self, model_config: ModelConfig, tokenizer=None) -> None:
++        """(fork) Resolve `think_penalty_words` to token ids, once, after the markers."""
++        if self.think_penalty <= 0 or self._think_penalty_token_ids is not None:
++            return
++        if tokenizer is None:
++            tokenizer = cached_tokenizer_from_config(model_config=model_config)
++        reserved = (
++            (self._reasoning_start_token_ids or [])
++            + (self._reasoning_end_token_ids or [])
++            + (self._natural_reasoning_end_token_ids or [])
++        )
++        ids, kept, dropped = resolve_think_penalty_token_ids(
++            tokenizer, self.think_penalty_words, reserved
++        )
++        if not ids:
++            raise ValueError(
++                f"think_penalty: none of think_penalty_words={self.think_penalty_words} "
++                f"is a single ordinary token; dropped {', '.join(dropped)}."
++            )
++        logger.info(
++            "think_penalty %.2f on %s; dropped: %s",
++            self.think_penalty,
++            kept,
++            ", ".join(dropped) or "none",
++        )
++        self._think_penalty_token_ids = ids
+diff --git a/config/vllm.py b/config/vllm.py
+index 0c90cef..4209a62 100644
+--- a/config/vllm.py
++++ b/config/vllm.py
+@@ -1606,6 +1606,19 @@ class VllmConfig:
+                 "Remove VLLM_USE_V2_MODEL_RUNNER=0."
+             )
+ 
++        # (fork) The think penalty exists only in Model Runner V2's sampler; on V1
++        # it would silently do nothing, so refuse the configuration instead.
++        if (
++            self.reasoning_config is not None
++            and self.reasoning_config.think_penalty > 0
++            and not self.use_v2_model_runner
++        ):
++            raise ValueError(
++                "reasoning_config.think_penalty is implemented in Model Runner V2 "
++                "only (v1/worker/gpu/sample/thinking_budget.py), and this "
++                "configuration runs V1. Set it to 0, or use a V2 configuration."
++            )
++
+         # Re-compute compile ranges after platform-specific config updates
+         # (e.g., XPU may lower max_num_batched_tokens when MLA is enabled)
+         self._set_compile_ranges()
+diff --git a/v1/worker/gpu/sample/thinking_budget.py b/v1/worker/gpu/sample/thinking_budget.py
+index eca7929..16c7916 100644
+--- a/v1/worker/gpu/sample/thinking_budget.py
++++ b/v1/worker/gpu/sample/thinking_budget.py
+@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
+ import numpy as np
+ import torch
+ 
++from vllm.logger import init_logger
+ from vllm.sampling_params import SamplingParams
+ from vllm.triton_utils import tl, triton
+ from vllm.utils.torch_utils import async_tensor_h2d
+@@ -14,6 +15,8 @@ from vllm.v1.worker.gpu.states import RequestState
+ if TYPE_CHECKING:
+     from vllm.config.reasoning import ReasoningConfig
+ 
++logger = init_logger(__name__)
++
+ _INT32_MAX = np.iinfo(np.int32).max
+ _COLD_SCAN_BLOCK = 1024
+ 
+@@ -29,6 +32,11 @@ class ThinkingBudgetState:
+         self.req_states = req_states
+         self.max_num_reqs = req_states.max_num_reqs
+         self.device = req_states.device
++        # (fork) Set before any early return: apply() and add_request() read it.
++        self.penalty_on = False
++        think_penalty = (
++            0.0 if reasoning_config is None else reasoning_config.think_penalty
++        )
+ 
+         start_ids = (
+             []
+@@ -47,6 +55,11 @@ class ThinkingBudgetState:
+         )
+         self.enabled = bool(start_ids and end_ids and natural_end_ids)
+         if not self.enabled:
++            if think_penalty > 0:  # (fork) never a silent no-op
++                raise ValueError(
++                    "think_penalty is set but the reasoning markers have no token "
++                    "ids (ReasoningConfig.initialize_token_ids)."
++                )
+             return
+ 
+         self.thinking_token_budget = UvaBackedTensor(
+@@ -78,10 +91,39 @@ class ThinkingBudgetState:
+             end_ids, dtype=torch.int32, device=self.device
+         )
+ 
++        # (fork) The think penalty (patches/think-penalty.patch in the
++        # qwen38-27b-rtx3090 thinking-levers fork): while a request is inside its
++        # reasoning, subtract `think_penalty` from the logits of a few reflection
++        # markers. It rides on the marker tracking above; see add_request().
++        if think_penalty > 0:
++            penalty_ids = reasoning_config.think_penalty_token_ids
++            if not penalty_ids:
++                raise ValueError(
++                    "think_penalty is set but think_penalty_token_ids were never "
++                    "resolved (ReasoningConfig.initialize_token_ids)."
++                )
++            self.penalty_on = True
++            self.think_penalty = float(think_penalty)
++            self.think_penalty_token_ids = torch.tensor(
++                penalty_ids, dtype=torch.int32, device=self.device
++            )
++            logger.info(
++                "Think penalty: -%.2f logits on %d token ids inside reasoning, "
++                "every request (Model Runner V2)",
++                self.think_penalty,
++                len(penalty_ids),
++            )
++
+     def add_request(self, req_idx: int, sampling_params: SamplingParams) -> None:
+         if not self.enabled:
+             return
+         budget = sampling_params.thinking_token_budget
++        if budget is None and self.penalty_on:
++            # (fork) A budget the request can never reach: the marker tracking
++            # then runs for every request, and this slot's marker cache is reset
++            # below like any budgeted request's, so a reused slot never carries
++            # the previous request's state. It never forces the end marker.
++            budget = _INT32_MAX
+         self.use_thinking_budget[req_idx] = budget is not None
+         if budget is None:
+             budget = -1
+@@ -135,6 +177,24 @@ class ThinkingBudgetState:
+             self.natural_reasoning_end_token_ids,
+             self.reasoning_end_token_ids,
+         )
++        if self.penalty_on:
++            # (fork) After the budget kernels, on the same stream, so the marker
++            # cache it reads is this step's.
++            apply_think_penalty(
++                logits,
++                expanded_idx_mapping,
++                self.thinking_token_budget.gpu,
++                self.req_states.all_token_ids.gpu,
++                self.req_states.total_len.gpu,
++                input_ids,
++                expanded_local_pos,
++                self.cached_last_start,
++                self.cached_last_end,
++                self.reasoning_start_token_ids,
++                self.natural_reasoning_end_token_ids,
++                self.think_penalty_token_ids,
++                self.think_penalty,
++            )
+ 
+ 
+ @triton.jit
+@@ -426,3 +486,136 @@ def apply_thinking_budget(
+         NATURAL_END_LEN=natural_end_len,
+         END_LEN=end_len,
+     )
++
++
++@triton.jit
++def _think_penalty_kernel(
++    logits_ptr,
++    logits_stride,
++    expanded_idx_mapping_ptr,
++    thinking_token_budget_ptr,
++    all_token_ids_ptr,
++    all_token_ids_stride,
++    total_len_ptr,
++    input_ids_ptr,
++    expanded_local_pos_ptr,
++    cached_last_start_ptr,
++    cached_last_end_ptr,
++    reasoning_start_token_ids_ptr,
++    natural_reasoning_end_token_ids_ptr,
++    penalty_token_ids_ptr,
++    penalty,
++    START_LEN: tl.constexpr,
++    NATURAL_END_LEN: tl.constexpr,
++    NUM_PENALTY: tl.constexpr,
++    PENALTY_BLOCK: tl.constexpr,
++):
++    """(fork) One program per logits row: if the row's request is inside its
++    reasoning, counting the draft tokens the row sees, subtract `penalty` from the
++    logits of the penalty token ids. The marker scan is _thinking_budget_kernel's."""
++    token_idx = tl.program_id(0).to(tl.int64)
++    req_state_idx = tl.load(expanded_idx_mapping_ptr + token_idx)
++    # The marker cache is only maintained for requests with a budget, which with
++    # the penalty on is every request (ThinkingBudgetState.add_request).
++    budget = tl.load(thinking_token_budget_ptr + req_state_idx)
++    if budget < 0:
++        return
++
++    local_pos = tl.load(expanded_local_pos_ptr + token_idx)
++    cur_req_first_pos = token_idx - local_pos
++    total_len = tl.load(total_len_ptr + req_state_idx)
++    effective_len = total_len + local_pos
++
++    last_start = tl.load(cached_last_start_ptr + req_state_idx)
++    last_end = tl.load(cached_last_end_ptr + req_state_idx)
++
++    start_lo = total_len - START_LEN + 1
++    if start_lo < 0:
++        start_lo = 0
++    for i in tl.range(start_lo, effective_len - START_LEN + 1):
++        start_match = True
++        for j in tl.static_range(0, START_LEN):
++            expected = tl.load(reasoning_start_token_ids_ptr + j)
++            actual = _load_effective_token(
++                all_token_ids_ptr,
++                all_token_ids_stride,
++                input_ids_ptr,
++                cur_req_first_pos,
++                req_state_idx,
++                total_len,
++                i + j,
++            )
++            start_match = start_match & (actual == expected)
++        if start_match:
++            last_start = i
++
++    end_lo = total_len - NATURAL_END_LEN + 1
++    if end_lo < 0:
++        end_lo = 0
++    for i in tl.range(end_lo, effective_len - NATURAL_END_LEN + 1):
++        end_match = True
++        for j in tl.static_range(0, NATURAL_END_LEN):
++            expected = tl.load(natural_reasoning_end_token_ids_ptr + j)
++            actual = _load_effective_token(
++                all_token_ids_ptr,
++                all_token_ids_stride,
++                input_ids_ptr,
++                cur_req_first_pos,
++                req_state_idx,
++                total_len,
++                i + j,
++            )
++            end_match = end_match & (actual == expected)
++        if end_match:
++            last_end = i
++
++    if last_start < 0 or last_start <= last_end:
++        return
++
++    offs = tl.arange(0, PENALTY_BLOCK)
++    mask = offs < NUM_PENALTY
++    penalty_ids = tl.load(penalty_token_ids_ptr + offs, mask=mask, other=0)
++    ptrs = logits_ptr + token_idx * logits_stride + penalty_ids
++    values = tl.load(ptrs, mask=mask, other=0.0)
++    tl.store(ptrs, values - penalty, mask=mask)
++
++
++def apply_think_penalty(
++    logits: torch.Tensor,
++    expanded_idx_mapping: torch.Tensor,
++    thinking_token_budget: torch.Tensor,
++    all_token_ids: torch.Tensor,
++    total_len: torch.Tensor,
++    input_ids: torch.Tensor,
++    expanded_local_pos: torch.Tensor,
++    cached_last_start: torch.Tensor,
++    cached_last_end: torch.Tensor,
++    reasoning_start_token_ids: torch.Tensor,
++    natural_reasoning_end_token_ids: torch.Tensor,
++    penalty_token_ids: torch.Tensor,
++    penalty: float,
++) -> None:
++    """(fork) In place on `logits`; needs this step's marker cache, which
++    apply_thinking_budget has just updated."""
++    num_penalty = penalty_token_ids.shape[0]
++    _think_penalty_kernel[(logits.shape[0],)](
++        logits,
++        logits.stride(0),
++        expanded_idx_mapping,
++        thinking_token_budget,
++        all_token_ids,
++        all_token_ids.stride(0),
++        total_len,
++        input_ids,
++        expanded_local_pos,
++        cached_last_start,
++        cached_last_end,
++        reasoning_start_token_ids,
++        natural_reasoning_end_token_ids,
++        penalty_token_ids,
++        penalty,
++        START_LEN=reasoning_start_token_ids.shape[0],
++        NATURAL_END_LEN=natural_reasoning_end_token_ids.shape[0],
++        NUM_PENALTY=num_penalty,
++        PENALTY_BLOCK=triton.next_power_of_2(num_penalty),
++    )

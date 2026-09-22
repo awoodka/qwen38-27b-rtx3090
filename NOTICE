@@ -31,3 +31,6 @@ Added or changed by this fork (changed lines are marked "(fork)")
   README.md, single-user/README.md, docs/gotchas.md, bench/api_smoke.py
       Corrections: thinking_token_budget works on vLLM 0.28.0's V2 runner, and
       bench/run_benchmarks.sh measures with thinking on.
+  patches/think-penalty.patch, patches/series, bench/test_think_penalty.py
+      A vLLM 0.28.0 patch (Apache-2.0, like vLLM) that subtracts think_penalty from a few
+      reflection-marker tokens while the model is inside its reasoning, and its tests.
