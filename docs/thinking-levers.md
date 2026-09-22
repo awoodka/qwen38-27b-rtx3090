@@ -294,8 +294,12 @@ server. It also screens "Actually" and "Maybe" on top of the default words. Its 
 `bench/thinking_levers.py`, runs the twelve original prompts in `bench/prompts_thinking.jsonl`
 and writes `summary.md`.
 
-Then quality, which comes first. Each lever runs the baseline's evals and is compared with
-it task by task. A lever succeeds if:
+Then quality, which comes first. The evals run in [llm-lab](https://github.com/awoodka/llm-lab),
+the harness that produced the baseline: each lever runs the baseline's benchmarks (`lab eval`)
+and is compared with them task by task (`lab runs thinking --baseline`), against this fork with
+its levers off on the same installation and in the same week, and against the baseline run
+itself. The first matters more: the fork's speed runs came out about 3% faster than the
+baseline's, and a task's token allowance scales with measured speed. A lever succeeds if:
 
 - no benchmark's paired accuracy drops by more than one standard error,
 - fewer answers run out of budget,

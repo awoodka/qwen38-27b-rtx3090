@@ -85,8 +85,10 @@ configuration, and paired with the levers off
 ### Next: evals
 
 Evals are running now: first a pilot on part of AIME 2025 and LiveCodeBench, then GPQA
-Diamond and LiveCodeBench in full for the settings that hold up, with the published
-quick-tier method of [Local Inference](https://localinference.alexwoodka.com/methodology).
+Diamond and LiveCodeBench in full for the settings that hold up. They run in
+[llm-lab](https://github.com/awoodka/llm-lab), the harness behind
+[Local Inference](https://localinference.alexwoodka.com/methodology), with its published
+quick-tier method.
 Each setting is judged against this fork with its levers off, on the same installation and in
 the same week, and also against the published baseline run of this stack
 ([run page](https://localinference.alexwoodka.com/runs/83638382-55b5-460b-a309-e80986a75c7d)).
