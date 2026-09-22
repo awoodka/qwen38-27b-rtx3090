@@ -1,0 +1,12 @@
+{"id": "div7not11", "prompt": "How many positive integers below 1000 are divisible by 7 but not by 11? Give the number and a one-line justification."}
+{"id": "sqrt-eq", "prompt": "Find every real x with sqrt(x + 5) = x - 1."}
+{"id": "rect", "prompt": "A rectangle has a perimeter of 34 cm and a diagonal of 13 cm. What is its area?"}
+{"id": "dice6", "prompt": "Two fair six-sided dice are rolled. What is the probability that the product of the two numbers is a multiple of 6?"}
+{"id": "pets", "prompt": "Alice, Bob and Carol each own exactly one pet: a cat, a dog or a fish, all different. Alice does not own the dog. The fish does not belong to Bob. Carol owns neither the cat nor the fish. Who owns which pet?"}
+{"id": "longest-substr", "prompt": "Write a Python function longest_unique(s) that returns the length of the longest substring of s without repeated characters, and state its time complexity."}
+{"id": "merge-intervals", "prompt": "Write a Python function merge(intervals) that takes a list of closed intervals [a, b], merges the ones that overlap or touch, and returns the result sorted by start."}
+{"id": "ice", "prompt": "Why does ice float on liquid water, when most solids sink in their own liquid? Answer in at most four sentences."}
+{"id": "1001", "prompt": "Is 1001 a prime number? Justify the answer."}
+{"id": "x2y2", "prompt": "Find all pairs of positive integers (x, y) with x^2 - y^2 = 45."}
+{"id": "round-table", "prompt": "In how many ways can 8 people sit around a round table if two particular people refuse to sit next to each other? Rotations of the same arrangement count as one."}
+{"id": "danish-odd", "prompt": "Hvad er summen af de første 50 ulige positive heltal? Forklar kort."}

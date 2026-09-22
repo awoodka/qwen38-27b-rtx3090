@@ -206,8 +206,17 @@ are screened on top of it.
 
 ## How the levers are judged
 
-Quality comes first. Each lever runs the baseline's evals and is compared with it task by
-task. A lever succeeds if:
+First, a live session on the GPU, `bench/thinking_levers_session.sh` (about 2 hours,
+unattended), checks each lever as a server setting: the fork with both levers off answers
+greedy prompts like bae2023 does across a restart, focused renders and bills correctly, the
+penalty lowers the marker rates in reasoning as λ rises while the answers keep those words,
+and at λ = 3 decode speed stays within 3% and tokens per step within 0.1 of the levers-off
+server. It also screens "Actually" and "Maybe" on top of the default words. Its client,
+`bench/thinking_levers.py`, runs the twelve original prompts in `bench/prompts_thinking.jsonl`
+and writes `summary.md`.
+
+Then quality, which comes first. Each lever runs the baseline's evals and is compared with
+it task by task. A lever succeeds if:
 
 - no benchmark's paired accuracy drops by more than one standard error,
 - fewer answers run out of budget,

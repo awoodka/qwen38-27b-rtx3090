@@ -38,3 +38,7 @@ Added or changed by this fork (changed lines are marked "(fork)")
   single-user/README.md, docs/thinking-levers.md, .env.example
       The THINK_PENALTY and THINK_PENALTY_WORDS knobs that apply the patch, their test and
       their docs.
+  bench/thinking_levers_session.sh, bench/thinking_levers.py, bench/prompts_thinking.jsonl,
+  docs/thinking-levers.md
+      The live GPU session that checks both levers as server settings, its client, and the
+      twelve original prompts it runs.
