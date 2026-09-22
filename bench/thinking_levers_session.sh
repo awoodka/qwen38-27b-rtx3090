@@ -14,6 +14,12 @@
 # Step 1 measures how reproducible greedy output is across a restart there, which is what the
 # levers-off parity in step 2 is judged against.
 #
+# Options, all environment variables: FORK, the runtime checkout to serve from (default: the one
+# this script is in); STEPS, a comma-separated subset of greedy,bench,rates,content,budget,render
+# (default all; step 1 runs only with greedy); PROMPTS, another JSONL of {id, prompt} for greedy
+# and rates, e.g. bench/prompts_thinking_hard.jsonl; RATES_CONCURRENCY (default 4); SESSION_PORT
+# (default 18020); OUT.
+#
 #  1. bae2023, booted twice: greedy outputs, then the same again after a restart.
 #  2. This fork with the levers off: greedy parity, run_benchmarks.sh single twice (the second
 #     counts), marker rates, the thinking_token_budget check, the render check.
@@ -26,13 +32,16 @@
 #  6. bench/thinking_levers.py report.
 set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-FORK="$(dirname "$HERE")"
-BASELINE_REPO=${BASELINE_REPO:?set BASELINE_REPO to a bae2023 checkout with its venv}
+FORK=${FORK:-$(dirname "$HERE")}
+STEPS=${STEPS:-all}
+want() { [ "$STEPS" = all ] || [[ ",$STEPS," == *",$1,"* ]]; }
+if want greedy; then BASELINE_REPO=${BASELINE_REPO:?set BASELINE_REPO to a bae2023 checkout with its venv}; fi
 OUT=${OUT:-$HERE/results/levers-$(date -u +%Y%m%dT%H%M%S)}
 HOST=127.0.0.1
-PORT=18020
+PORT=${SESSION_PORT:-18020}
 mkdir -p "$OUT"
-CLIENT=(python3 "$HERE/thinking_levers.py" --out-dir "$OUT" --host "$HOST" --port "$PORT")
+CLIENT=(python3 "$HERE/thinking_levers.py" --out-dir "$OUT" --host "$HOST" --port "$PORT" ${PROMPTS:+--prompts "$PROMPTS"})
+RATES=(rates --concurrency "${RATES_CONCURRENCY:-4}")
 SERVER=""
 FAILED=()
 
@@ -107,44 +116,46 @@ bench() {
   done
 }
 
-say "session: fork $(git -C "$FORK" rev-parse --short HEAD) at $FORK, baseline $(git -C "$BASELINE_REPO" rev-parse --short HEAD) at $BASELINE_REPO, out $OUT"
+say "session: fork $(git -C "$FORK" rev-parse --short HEAD) at $FORK, steps $STEPS${PROMPTS:+, prompts $PROMPTS}, out $OUT"
 nvidia-smi --query-gpu=name,power.limit,clocks.max.sm,driver_version --format=csv,noheader | tee -a "$OUT/session.log"
 
 # 1. How reproducible greedy output is across a restart, on the commit this fork branches from.
-start_server bae2023-a "$BASELINE_REPO"
-check "greedy bae2023-a" "${CLIENT[@]}" greedy --tag bae2023-a
-stop_server
-start_server bae2023-b "$BASELINE_REPO"
-check "greedy bae2023-b" "${CLIENT[@]}" greedy --tag bae2023-b --compare bae2023-a
-stop_server
+if want greedy; then
+  start_server bae2023-a "$BASELINE_REPO"
+  check "greedy bae2023-a" "${CLIENT[@]}" greedy --tag bae2023-a
+  stop_server
+  start_server bae2023-b "$BASELINE_REPO"
+  check "greedy bae2023-b" "${CLIENT[@]}" greedy --tag bae2023-b --compare bae2023-a
+  stop_server
+fi
 
 # 2. The fork with both levers off.
 start_server off "$FORK"
 log_has off "no think penalty" "Think penalty|think_penalty [0-9]" absent
-check "greedy off" "${CLIENT[@]}" greedy --tag off --compare bae2023-a bae2023-b
-bench off
-check "rates off" "${CLIENT[@]}" rates --tag off
-check "budget off" "${CLIENT[@]}" budget --tag off
-check "render off" "${CLIENT[@]}" render --tag off --expect xhigh --efforts recorded
+want greedy && check "greedy off" "${CLIENT[@]}" greedy --tag off --compare bae2023-a bae2023-b
+want bench && bench off
+want rates && check "rates off" "${CLIENT[@]}" "${RATES[@]}" --tag off
+want budget && check "budget off" "${CLIENT[@]}" budget --tag off
+want render && check "render off" "${CLIENT[@]}" render --tag off --expect xhigh --efforts recorded
 stop_server
 
 # 3. The reasoning prompt.
 start_server focused "$FORK" REASONING_EFFORT=focused
 log_has focused "serves the fork's template" "templates/qwen3.8-27b.jinja"
 log_has focused "default effort focused" "'reasoning_effort': 'focused'"
-check "render focused" "${CLIENT[@]}" render --tag focused --expect focused
-check "rates focused" "${CLIENT[@]}" rates --tag focused
+want render && check "render focused" "${CLIENT[@]}" render --tag focused --expect focused
+want rates && check "rates focused" "${CLIENT[@]}" "${RATES[@]}" --tag focused
 stop_server
 
 # 4. The token penalty.
 for L in 1.5 3 6 100; do
   start_server "p$L" "$FORK" THINK_PENALTY=$L
   log_has "p$L" "the penalty is on" "Think penalty: -$(printf %.2f "$L") logits on 6 token ids"
-  check "rates p$L" "${CLIENT[@]}" rates --tag "p$L"
-  check "content p$L" "${CLIENT[@]}" content --tag "p$L"
+  want rates && check "rates p$L" "${CLIENT[@]}" "${RATES[@]}" --tag "p$L"
+  want content && check "content p$L" "${CLIENT[@]}" content --tag "p$L"
   if [ "$L" = 3 ]; then
-    check "budget p3" "${CLIENT[@]}" budget --tag p3
-    bench p3
+    want budget && check "budget p3" "${CLIENT[@]}" budget --tag p3
+    want bench && bench p3
   fi
   stop_server
 done
@@ -154,8 +165,8 @@ for W in Actually Maybe; do
   tag="p3-$(echo "$W" | tr '[:upper:]' '[:lower:]')"
   start_server "$tag" "$FORK" THINK_PENALTY=3 THINK_PENALTY_WORDS="Wait,Hmm,Alternatively,$W"
   log_has "$tag" "the penalty is on, 8 token ids" "Think penalty: -3.00 logits on 8 token ids"
-  check "rates $tag" "${CLIENT[@]}" rates --tag "$tag"
-  check "content $tag" "${CLIENT[@]}" content --tag "$tag"
+  want rates && check "rates $tag" "${CLIENT[@]}" "${RATES[@]}" --tag "$tag"
+  want content && check "content $tag" "${CLIENT[@]}" content --tag "$tag"
   stop_server
 done
 

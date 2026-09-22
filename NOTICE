@@ -42,3 +42,5 @@ Added or changed by this fork (changed lines are marked "(fork)")
   docs/thinking-levers.md
       The live GPU session that checks both levers as server settings, its client, and the
       twelve original prompts it runs.
+  bench/prompts_thinking_hard.jsonl
+      Twelve harder original prompts, for marker rates that need longer reasoning.

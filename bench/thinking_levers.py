@@ -5,7 +5,8 @@ and `report` turns all of it into summary.md and summary.json.
 
   greedy  --tag T [--compare T1 ...]  temperature-0 outputs, thinking on, one request at a time;
                                       optionally compared with earlier tags (identical or not)
-  rates   --tag T                     bench/prompts_thinking.jsonl at the model's default sampling:
+  rates   --tag T                     the prompts (--prompts, default bench/prompts_thinking.jsonl) at
+                                      the model's default sampling:
                                       reasoning length, finish reasons, marker rates in reasoning
                                       (by token, via /tokenize, and by word), tokens per step
   content --tag T                     the penalized words must still reach the answer
@@ -73,8 +74,11 @@ class Server:
         return total("vllm:spec_decode_num_drafts_total"), total("vllm:spec_decode_num_accepted_tokens_total")
 
 
+PROMPTS = HERE / "prompts_thinking.jsonl"
+
+
 def prompts():
-    return [json.loads(line) for line in open(HERE / "prompts_thinking.jsonl") if line.strip()]
+    return [json.loads(line) for line in open(PROMPTS) if line.strip()]
 
 
 def message_fields(r):
@@ -341,10 +345,15 @@ def main():
     ap.add_argument("--samples", type=int, default=2)
     ap.add_argument("--concurrency", type=int, default=4)
     ap.add_argument("--max-tokens", type=int, default=16384)
+    ap.add_argument("--prompts", type=Path, default=None,
+                    help="a JSONL of {id, prompt} for greedy and rates (default bench/prompts_thinking.jsonl)")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=18020)
     args = ap.parse_args()
     args.out_dir.mkdir(parents=True, exist_ok=True)
+    if args.prompts:
+        global PROMPTS
+        PROMPTS = args.prompts
     if args.command == "report":
         return cmd_report(args)
     if not args.tag:

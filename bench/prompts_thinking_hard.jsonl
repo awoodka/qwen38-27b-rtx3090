@@ -1,0 +1,12 @@
+{"id": "triples720", "prompt": "How many ordered triples of positive integers (a, b, c) satisfy a * b * c = 720?"}
+{"id": "lattice", "prompt": "How many lattice paths from (0, 0) to (7, 7), using unit steps right or up, never rise above the line y = x + 1?"}
+{"id": "pow7mod1000", "prompt": "What is the remainder when 7^2026 is divided by 1000?"}
+{"id": "hth-hht", "prompt": "A fair coin is tossed until either the pattern HTH or the pattern HHT appears as three consecutive tosses. What is the probability that HTH appears first?"}
+{"id": "drinks", "prompt": "Ana, Ben, Cy and Dee sit in seats 1 to 4 in a row, and each drinks one of tea, coffee, juice and water, all different. The coffee drinker sits in seat 1. Dee sits in seat 4. Ana sits directly to the right of the coffee drinker. Cy drinks juice. The tea drinker sits next to the coffee drinker. Dee drinks neither tea nor juice. Who sits where, and who drinks what?"}
+{"id": "min-coins", "prompt": "Write a Python function min_coins(coins, amount) that returns the fewest coins summing to amount, or -1 if that is impossible. Then explain, with an example, why always taking the largest coin fails for coins [1, 3, 4] and amount 6."}
+{"id": "anagram-groups", "prompt": "Write a Python function that takes a list of words, groups anagrams together, and returns the groups sorted by size, largest first, breaking ties alphabetically by each group's first word. Words within a group keep their input order."}
+{"id": "hexagon", "prompt": "A regular hexagon has side length 2, and a circle is inscribed in it. What is the exact area inside the hexagon but outside the circle?"}
+{"id": "digit-seq", "prompt": "A sequence starts at a(1) = 1, and each next term adds the sum of the digits of the current term: a(n+1) = a(n) + digitsum(a(n)). Is 2026 a term of this sequence? Justify the answer."}
+{"id": "circle-triangle", "prompt": "Three points are chosen independently and uniformly at random on a circle. What is the probability that the triangle they form contains the circle's center?"}
+{"id": "x2y2-2025", "prompt": "Find all pairs of integers (x, y) with x^2 + y^2 = 2025."}
+{"id": "fence", "prompt": "A farmer has 100 m of fence to enclose a rectangular field along a straight river; no fence is needed along the river. The field must also be split into three equal parts by fences perpendicular to the river. Which dimensions maximize the area, and what is that area?"}
